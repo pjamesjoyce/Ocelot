@@ -193,31 +193,4 @@ for dataset in ['1bb210b5-ed27-4d8f-9d16-63e1455d6c6d_c4ea317c-5719-4f10-9e04-7d
     if meta.loc['treatmentActivity', 'value']:
         pass#not sure what to do here
     datasets = {}
-    referenceProductIndexes = quantitative[quantitative['group'] == 'ReferenceProduct']
-    referenceProductIndexes = referenceProductIndexes[
-        referenceProductIndexes['valueType'] == 'Exchange']
-    referenceProductIndexes = list(referenceProductIndexes.index)
-    for chosenReferenceProductIndex in referenceProductIndexes:
-        quantitativeAllocated = quantitative.copy()
-        #put to zero the amount of the exchange and PV of the other reference products
-        otherReferenceProductIndexes = copy(referenceProductIndexes)
-        otherReferenceProductIndexes.remove(chosenReferenceProductIndex)
-        otherReferenceProductIds = set(quantitative.loc[otherReferenceProductIndexes, 'exchangeId'])
-        toSetToZeroIndexes = quantitative[quantitative['exchangeId'].isin(otherReferenceProductIds)]
-        toSetToZeroIndexes = toSetToZeroIndexes[toSetToZeroIndexes['valueType'].isin(
-            ['Exchange', 'ProductionVolume'])]
-        toSetToZeroIndexes = list(toSetToZeroIndexes.index)
-        quantitativeAllocated.loc[toSetToZeroIndexes, 'amount'] = 0.
-        #recalculate
-        quantitativeAllocated = recalculate(quantitativeAllocated)
-        quantitativeAllocated = osf.recalculateUncertainty(quantitativeAllocated)
-        quantitativeAllocated['amount'] = quantitativeAllocated['calculated amount'
-            ] / abs(quantitative.loc[chosenReferenceProductIndex, 'amount'])
-        ie = osf.ie_name_merge(meta['activityName'], meta['geography'], 
-            masterData['intermediateExchange'].loc[
-            quantitative.loc[chosenReferenceProductIndex, 'exchangeId'], 'name'])
-        #df_transient = quantitativeToExcel(df_transient, activityOverview, meta, MD, folder)
-        #validate(ie, ie_index, df_transient, ee_index, B)
-        datasets[chosenReferenceProductIndex] = quantitativeAllocated.copy()
-    if 'WithByProduct' in meta['allocationType']:
-        1/0
+    

@@ -293,7 +293,7 @@ def findAllocationType(meta, stem):
         if nbReferenceProducts + nbAllocatableByProducts == 1:
             meta['allocationType'] = 'noAllocation'
         elif nbReferenceProducts > 1:
-            if meta['nonAllocatableByProduct']:
+            if nbAllocatableByProducts > 0:
                 meta['allocationType'] = 'combinedProductionWithByProduct'
             else:
                 meta['allocationType'] = 'combinedProductionWithoutByProduct'
@@ -554,7 +554,7 @@ activityLinks = {}
 datasets = {}
 counter = 0
 start = time.time()
-filelist = ['2c898d92-5184-4b7f-9fb9-af71d2fa2959_4aeb622f-8675-4449-889b-bca8bbb3d44a.spold']
+#filelist = ['a6bbe7bb-7b64-4da5-be96-6ba658055690_e6aad2de-0b1b-49c3-a0c4-797ba34d87e5.spold']
 for filename in filelist:
     counter += 1
     osf.estimate_time(start, counter, len(filelist))
