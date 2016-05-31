@@ -88,9 +88,11 @@ def findReferenceProduct(quantitative, masterData):
     name = masterData['intermediateExchange'].loc[df.iloc[0]['exchangeId'], 'name']
     index = df.iloc[0].name
     return name, index
-def prepareWriter(meta, resultFolder, quantitative, masterData, 
-        cuteName = False):
-    if cuteName:
+def prepareWriter(dataset, resultFolder, overwriteName, cuteName):
+    meta = dataset['meta']
+    if overwriteName != '':
+        filename = overwriteName
+    elif cuteName:
         filename = '%s - %s - %s.xlsx' % tuple(
             meta.loc[['activityName', 'geography', 'mainReferenceProductName'], 
             'value'])
@@ -99,13 +101,23 @@ def prepareWriter(meta, resultFolder, quantitative, masterData,
         filename = meta.loc['filename', 'value'].replace('.spold', '.xlsx')
     writer = pd.ExcelWriter(os.path.join(resultFolder, filename))
     return writer
-def prepareMeta(meta, writer):
-    meta.loc['technologyLevel', 'value'] = technologyLevels[
-        meta.loc['technologyLevel', 'value']]
-    meta.loc['specialActivityType', 'value'] = specialActivityTypes[
-        meta.loc['specialActivityType', 'value']]
-    meta.loc['accessRestrictedTo', 'value'] = accessRestrictedTos[
-        meta.loc['accessRestrictedTo', 'value']]
+def prepareMeta(dataset, writer):
+    meta = dataset['meta']
+    try:
+        meta.loc['technologyLevel', 'value'] = technologyLevels[
+            meta.loc['technologyLevel', 'value']]
+    except KeyError:
+        pass
+    try:
+        meta.loc['specialActivityType', 'value'] = specialActivityTypes[
+            meta.loc['specialActivityType', 'value']]
+    except KeyError:
+        pass
+    try:
+        meta.loc['accessRestrictedTo', 'value'] = accessRestrictedTos[
+            meta.loc['accessRestrictedTo', 'value']]
+    except KeyError:
+        pass
     meta = meta.loc[['filename', 'activityName', 'geography', 'startDate', 'endDate', 
       'specialActivityType', 'technologyLevel', 'accessRestrictedTo', 'allocationType', 
       'treatmentActivity', 'wasteOutput', 'mainReferenceProductName']]
@@ -113,7 +125,8 @@ def prepareMeta(meta, writer):
         ).to_excel(writer, 'meta', cols = ['field', 'value'], 
         merge_cells = False, index = False)
     return writer
-def prepareQuantitative(quantitative, activityOverview, meta, MD, writer):
+def prepareQuantitative(dataset, activityOverview, MD, writer):
+    quantitative = dataset['quantitative']
     properties = quantitative[quantitative['valueType'] == 'Property']
     indexes = set(quantitative.index).difference(set(properties.index))
     quantitative = quantitative.loc[indexes]
@@ -165,7 +178,7 @@ def prepareQuantitative(quantitative, activityOverview, meta, MD, writer):
         FromTechnosphere, ToEnvironment, FromEnvironment, others])
     quantitative.to_excel(writer, 'quantitative', cols = cols, 
         merge_cells = False, index = False)
-    return writer, quantitative
+    return writer
 def estimate_time(start, counter, max_counter):
     per_iteration = (time.time() - start) / float(counter)
     t = (max_counter - counter) * per_iteration
@@ -180,8 +193,9 @@ def estimate_time(start, counter, max_counter):
         print h, 'hours and', m, 'minutes remaining'
     print per_iteration, 'seconds per iteration, average'
     return t
-def nonAllocatableByProductFlip(quantitative, masterData, logs):
+def nonAllocatableByProductFlip(dataset, masterData, logs):
     #joining with masterData to get the classification
+    quantitative = dataset['quantitative']
     quantitative = quantitative.set_index('exchangeId')
     quantitative = quantitative.join(masterData['intermediateExchange'][['classification']])
     quantitative = quantitative.reset_index().rename(columns = {'index': 'exchangeId'})
@@ -195,12 +209,15 @@ def nonAllocatableByProductFlip(quantitative, masterData, logs):
     toFlipIndexes = list(toFlip.index)
     quantitative.loc[toFlipIndexes, 'amount'] = -quantitative.loc[toFlipIndexes, 'amount']
     #do something with logs
-    return quantitative, logs
+    dataset['quantitative'] = quantitative
+    return dataset, logs
 def recalculateUncertainty(quantitative):
     #write me!
     return quantitative
-def validateAgainstMatrix(ie_index, quantitative, ee_index, B, meta, masterData, 
+def validateAgainstMatrix(ie_index, dataset, ee_index, B, masterData, 
         logs, referenceIndex = False):
+    quantitative = dataset['quantitative']
+    meta = dataset['meta']
     if referenceIndex == False:
         name, referenceIndex = findReferenceProduct(quantitative, masterData)
     else:
@@ -238,13 +255,11 @@ def validateAgainstMatrix(ie_index, quantitative, ee_index, B, meta, masterData,
         logs = writeInLogs(logs, severity, validateAgainstMatrix, meta, 
             quantitative, message)
     return logs
-def writeDatasetToExcel(meta, resultFolder, quantitative, masterData, 
-        activityOverview, cuteName = False):
-    writer = prepareWriter(meta, resultFolder, quantitative, 
-        masterData, cuteName = cuteName)
-    writer = prepareMeta(meta, writer)
-    writer, quantitative = prepareQuantitative(quantitative, 
-        activityOverview, meta, masterData, writer)
+def writeDatasetToExcel(dataset, resultFolder, masterData, activityOverview, cuteName = False, 
+                        overwriteName = ''):
+    writer = prepareWriter(dataset, resultFolder, overwriteName, cuteName)
+    writer = prepareMeta(dataset, writer)
+    writer = prepareQuantitative(dataset, activityOverview, masterData, writer)
     writer.save()
     writer.close()
 def initializeLogs(logFolder, step):
@@ -271,11 +286,15 @@ def closeLogs(logs):
     for t in logs:
         logs[t].close()
 def scaleDataset(dataset):
-    scalingExchangeIndex = dataset['meta'].loc['mainReferenceProductIndex']
-    quantitative = dataset['quantitative']
+    scalingExchangeIndex = dataset['meta'].loc['mainReferenceProductIndex', 'value']
+    quantitative = dataset['quantitative'].copy()
     indexes = list(quantitative[quantitative['valueType'] == 'Exchange'].index)
     quantitative.loc[indexes, 'amount'] = quantitative.loc[indexes, 'amount'
         ] / abs(quantitative.loc[scalingExchangeIndex, 'amount'])
     quantitative = recalculateUncertainty(quantitative)
-    dataset['quantitative'] = quantitative
+    dataset['quantitative'] = quantitative.copy()
     return dataset
+def selectExchangesToTechnosphere(quantitative):
+    sel = quantitative[quantitative['valueType'] == 'Exchange']
+    sel = sel[sel['group'].isin(['ByProduct', 'ReferenceProduct'])]
+    return sel

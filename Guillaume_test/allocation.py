@@ -137,7 +137,7 @@ def recalculate(df):
         values[index] = copy(calculatedAmount[df.loc[index, 'variableName']])
     df['calculated amount'] = pd.Series(values)
     return df
-def findAllocationFactors(quantitative, masterData):
+def findEconomicAllocationFactors(quantitative, masterData):
     allocationFactors = quantitative[quantitative['propertyId'
         ] == '38f94dd1-d5aa-41b8-b182-c0c42985d9dc']
     allocationFactors = allocationFactors[allocationFactors['group'].isin(
@@ -148,8 +148,7 @@ def findAllocationFactors(quantitative, masterData):
         masterData['intermediateExchange'][['classification']])
     allocationFactors = allocationFactors[allocationFactors[
         'classification'] == 'allocatable product']
-    sel = quantitative[quantitative['valueType'] == 'Exchange']
-    sel = sel[sel['group'].isin(['ByProduct', 'ReferenceProduct'])]
+    sel = osf.selectExchangesToTechnosphere(quantitative)
     allocationFactors = allocationFactors.join(sel.set_index('exchangeId')[['amount']])
     allocationFactors['revenu'] = abs(allocationFactors['price'
         ] * allocationFactors['amount'])
@@ -157,17 +156,16 @@ def findAllocationFactors(quantitative, masterData):
         ] / allocationFactors['revenu'].sum()
     allocationFactors = allocationFactors[allocationFactors['allocation factor'] != 0.]
     return allocationFactors
-def economicAllocation(meta, quantitative, masterData, ie_index, ee_index, B, 
-        validateAgainstMatrixSwitch, cuteName, logs, resultFolder, writeToExcelSwitch):
-    allocationFactors = findAllocationFactors(quantitative, masterData)
+def allocateWithFactors(dataset, allocationFactors, logs, factorsFrom):
     allocatedDatasets = {}
+    quantitative = dataset['quantitative'].copy()
     #extract once exchanges and exchanges to technosphere indexes for convenience
     exchanges = quantitative[quantitative['valueType'] == 'Exchange']
     exchangesToTechnosphere = exchanges[exchanges['group'].isin(
         ['ReferenceProduct', 'ByProduct'])]
     for chosenByProductExchangeId in list(allocationFactors.index):
         allocatedQuantitative = quantitative.copy()
-        allocatedMeta = meta.copy()
+        allocatedMeta = dataset['meta'].copy()
         #find new reference product
         chosenByProductIndex = exchangesToTechnosphere[
             exchangesToTechnosphere['exchangeId'] == chosenByProductExchangeId].index[0]
@@ -193,14 +191,15 @@ def economicAllocation(meta, quantitative, masterData, ie_index, ee_index, B,
         allocatedQuantitative.loc[indexes, 'amount'
             ] = allocatedQuantitative.loc[indexes, 'amount'
             ] * allocationFactors.loc[chosenByProductExchangeId, 'allocation factor']
-        message = 'successful economic allocation'
-        logs = osf.writeInLogs(logs, 'info', economicAllocation, allocatedMeta, 
+        message = 'successful allocation'
+        logs = osf.writeInLogs(logs, 'info', factorsFrom, allocatedMeta, 
             allocatedQuantitative, message)
         allocatedDatasets[chosenByProductExchangeId] = {
             'meta': allocatedMeta.copy(), 'quantitative': allocatedQuantitative.copy()}
     return allocatedDatasets, logs
-def combinedProduction(quantitative, validateAgainstMatrixSwitch, writeToExcelSwitch, logs, 
-        masterData, cuteName, meta, resultFolder):
+def combinedProduction(dataset, logs, masterData):
+    meta = dataset['meta']
+    quantitative = dataset['quantitative']
     referenceProductIndexes = quantitative[quantitative['group'] == 'ReferenceProduct']
     referenceProductIndexes = referenceProductIndexes[
         referenceProductIndexes['valueType'] == 'Exchange']
@@ -231,17 +230,110 @@ def combinedProduction(quantitative, validateAgainstMatrixSwitch, writeToExcelSw
         allocatedQuantitative = osf.recalculateUncertainty(allocatedQuantitative)
         allocatedQuantitative['amount'] = allocatedQuantitative['calculated amount'
             ] / abs(quantitative.loc[chosenReferenceProductIndex, 'amount'])
-        if validateAgainstMatrixSwitch:
-            logs = osf.validateAgainstMatrix(ie_index, allocatedQuantitative, 
-                ee_index, B, allocatedMeta, masterData, logs)
-        if writeToExcelSwitch:
-            osf.writeDatasetToExcel(allocatedMeta.copy(), resultFolder, allocatedQuantitative, 
-                masterData, activityOverview, cuteName = cuteName)
         allocatedDatasets[allocatedMeta.loc['mainReferenceProductId', 'value']] = {
             'meta': allocatedMeta.copy(), 'quantitative': allocatedQuantitative.copy()}
     #if 'WithByProduct' in meta.loc['allocationType', 'value']:
     #    1/0
     return allocatedDatasets, logs
+def mergeCombinedProductionWithByProduct(allocatedDatasets, logs):
+    allocatedDatasetsBeforeMerge = {}
+    #each dataset need to be economically allocated
+    for exchangeId in allocatedDatasets:
+        dataset = allocatedDatasets[exchangeId]
+        allocatedDatasetsBeforeMerge_, logs = economicAllocation(dataset, masterData, logs)
+        for exchangeId_ in allocatedDatasetsBeforeMerge_:
+            if exchangeId_ not in allocatedDatasetsBeforeMerge:
+                allocatedDatasetsBeforeMerge[exchangeId_] = {}
+            allocatedDatasetsBeforeMerge[exchangeId_][exchangeId
+                ] = allocatedDatasetsBeforeMerge_[exchangeId_]
+    allocatedDatasets = {}
+    for exchangeId_ in allocatedDatasetsBeforeMerge:
+        if len(allocatedDatasetsBeforeMerge[exchangeId_]) == 1:
+            #This is for the initial reference products: there is only one dataset
+            exchangeId = allocatedDatasetsBeforeMerge[exchangeId_].keys()[0]
+            allocatedDatasets[exchangeId_] = deepcopy(allocatedDatasetsBeforeMerge[
+                exchangeId_][exchangeId])
+        else:
+            #there will be one dataset per byproduct per reference 
+            #product to merge into one dataset per byproduct
+            toMerge = []
+            for exchangeId in allocatedDatasetsBeforeMerge[exchangeId_]:
+                df = allocatedDatasetsBeforeMerge[exchangeId_][exchangeId]['quantitative']
+                df = df[df['valueType'].isin(['Exchange', 'ProductionVolume'])]
+                toMerge.append(df)
+            #put exchanges and produciton volume in the same data frame
+            toMerge = pd.concat(toMerge)
+            #add the quantities
+            quantitativeMerged = pd.pivot_table(toMerge, values = ['amount'], 
+                rows = ['Ref'], aggfunc = np.sum)
+            df = df.set_index('Ref')
+            cols = list(df.columns)
+            #remove columns that are not useful
+            cols.remove('amount')
+            cols.remove('length')
+            cols.remove('calculation order')
+            cols.remove('calculated amount')
+            #put back together amounts with the rest of the data frame
+            quantitativeMerged = quantitativeMerged.join(df[cols]).reset_index()
+            #from the last one, add parameters and properties
+            df = allocatedDatasetsBeforeMerge[exchangeId_][exchangeId]['quantitative']
+            df = df[~df['valueType'].isin(['Exchange', 'ProductionVolume'])]
+            quantitativeMerged = pd.concat([quantitativeMerged, df])
+            quantitativeMerged.index = range(len(quantitativeMerged))
+            name, index = osf.findReferenceProduct(quantitativeMerged, masterData)
+            allocatedMeta = allocatedDatasetsBeforeMerge[exchangeId_][exchangeId]['meta'].copy()
+            exchangeId = quantitativeMerged.loc[index, 'exchangeId']
+            allocatedMeta.loc['mainReferenceProductId', 'value'] = copy(exchangeId)
+            allocatedMeta.loc['mainReferenceProductIndex', 'value'] = copy(index)
+            allocatedMeta.loc['mainReferenceProductName', 'value'] = masterData[
+                'intermediateExchange'].loc[exchangeId, 'name']
+            allocatedDatasets[exchangeId_] = {'meta': allocatedMeta, 
+                'quantitative': quantitativeMerged}
+    return allocatedDatasets, logs
+def economicAllocation(dataset, masterData, logs):
+    allocationFactors = findEconomicAllocationFactors(dataset, masterData)
+    allocatedDatasets, logs = allocateWithFactors(dataset, allocationFactors, logs, economicAllocation)
+    return allocatedDatasets, logs
+def trueValueAllocation(dataset, logs):
+    allocationFactors = findTrueValueAllocationFactors(dataset)
+    allocatedDatasets, logs = allocateWithFactors(dataset, allocationFactors, logs, findTrueValueAllocationFactors)
+    return allocatedDatasets, logs
+def findTrueValueAllocationFactors(dataset):
+    quantitative = dataset['quantitative'].copy()
+    #select price and true value relation properties
+    allocationFactors = quantitative[quantitative['group'].isin(
+        ['ReferenceProduct', 'ByProduct'])]
+    allocationFactors = allocationFactors[allocationFactors['propertyId'
+        ].isin(['38f94dd1-d5aa-41b8-b182-c0c42985d9dc', 
+            '7a3978ea-3e26-4329-bc8b-0915d58a7e6f'])]
+    allocationFactors = allocationFactors[['exchangeId', 'amount', 'propertyId']]
+    allocationFactors = pd.pivot_table(allocationFactors, values = 'amount', 
+        rows = 'exchangeId', cols = ['propertyId'], aggfunc = np.sum)
+    allocationFactors = allocationFactors.rename(columns = {
+        '38f94dd1-d5aa-41b8-b182-c0c42985d9dc': 'price', 
+        '7a3978ea-3e26-4329-bc8b-0915d58a7e6f': 'TVR'})
+    sel = osf.selectExchangesToTechnosphere(quantitative).set_index('exchangeId')
+    sel = sel[['amount']]
+    #join exchange amounts with properties
+    allocationFactors = sel.join(allocationFactors)
+    allocationFactors = allocationFactors.replace(to_replace = {
+        'TVR': {np.nan: 0.}})
+    #calculate revenu per exchange
+    allocationFactors['revenu'] = allocationFactors['amount'] * allocationFactors['price']
+    #calculate true value for exchange with TVR
+    priceOnlyExchanges = allocationFactors[allocationFactors['TVR'] == 0.]
+    allocationFactors = allocationFactors[allocationFactors['TVR'] != 0.]
+    allocationFactors['amount*TVR'] = allocationFactors['TVR'] * allocationFactors['amount']
+    allocationFactors['amount*TVR/sum(amount*TVR)'] = allocationFactors['amount*TVR'] / allocationFactors['amount*TVR'].sum()
+    allocationFactors['TV'] = allocationFactors['amount*TVR/sum(amount*TVR)'] * (
+        allocationFactors['revenu'].sum() / allocationFactors['amount*TVR'].sum())
+    #calculate true value for exchange without TVR, if any
+    if len(priceOnlyExchanges) > 0:
+        priceOnlyExchanges['TV'] = priceOnlyExchanges['revenu'].copy()
+        allocationFactors = pd.concat([allocationFactors, priceOnlyExchanges])
+    allocationFactors['allocation factor'] = allocationFactors['TV'
+        ] / allocationFactors['TV'].sum()
+    return allocationFactors
 logFolder = r'C:\ocelot\logs'
 DBFolder = r'C:\ocelot\databases'
 DBName = 'ecoinvent32_internal.pkl'
@@ -249,7 +341,7 @@ resultFolder = r'C:\ocelot\excel\datasets'
 datasets, masterData, activityOverview, activityLinks = osf.openDB(DBFolder, DBName)
 matrixFolder = r'C:\python\DB_versions\3.2\cut-off\python variables'
 validateAgainstMatrixSwitch = True
-writeToExcelSwitch = False
+writeToExcelSwitch = True
 cuteName = True
 logs = osf.initializeLogs(logFolder, 'allocation')
 (A, B, C, ee_index, ee_list, ie_index, 
@@ -258,64 +350,41 @@ logs = osf.initializeLogs(logFolder, 'allocation')
 start = time.time()
 counter = 0
 #for dataset in datasets:
-for dataset in ['7ad19c9d-644d-497d-bbab-08da582ca3ec_b89dadb0-75e9-44fd-8d41-1ec8dcce23b6']:
-    meta = datasets[dataset]['meta']
+for filename in ['3e841e74-a54b-4534-8248-7736542098ad_1125e767-7b5d-442e-81d6-9b0d3e1919ac']:
+    dataset = datasets[filename]
+    meta = dataset['meta']
     print meta.loc['activityName', 'value'], meta.loc['geography', 'value']
-    print meta.loc['allocationType', 'value']
-    quantitative = datasets[dataset]['quantitative']
     if meta.loc['nonAllocatableByProduct', 'value']:
-        quantitative, logs = osf.nonAllocatableByProductFlip(quantitative, masterData, logs)
+        dataset, logs = osf.nonAllocatableByProductFlip(dataset, masterData, logs)
     if meta.loc['allocationType', 'value'] == 'noAllocation':
-        allocatedDatasets = {meta.loc['mainReferenceProductExchangeId', 'value']: 
-                datasets[dataset]}
+        allocatedDatasets = {meta.loc['mainReferenceProductExchangeId', 'value']: deepcopy(dataset)}
     elif 'combined' in meta.loc['allocationType', 'value']:
-        allocatedDatasets, logs = combinedProduction(quantitative, validateAgainstMatrixSwitch, 
-            writeToExcelSwitch, logs, masterData, cuteName, meta, resultFolder)
+        allocatedDatasets, logs = combinedProduction(dataset, logs, masterData)
+        if meta.loc['allocationType', 'value'] == 'combinedProductionWithByProduct':
+            allocatedDatasets, logs = mergeCombinedProductionWithByProduct(allocatedDatasets, logs)
     elif meta.loc['allocationType', 'value'] == 'economicAllocation':
-        if 0: #not meta.loc['treatmentActivity', 'value']:
-            counter += 1
-            print counter
-            print meta.loc['activityName', 'value'], meta.loc['geography', 'value']
-            allocatedDatasets, logs = economicAllocation(meta, quantitative, 
-                masterData, ie_index, ee_index, B, validateAgainstMatrixSwitch, 
-                cuteName, logs, resultFolder, writeToExcelSwitch)
+        if not meta.loc['treatmentActivity', 'value']:
+            allocatedDatasets, logs = economicAllocation(dataset, masterData, logs)
+        else:
+            raise NotImplementedError('To be implemented soon')
     elif meta.loc['allocationType', 'value'] == 'trueValueAllocation':
-        pass
+        if meta.loc['treatmentActivity', 'value']:
+            raise NotImplementedError('To be implemented soon')
+        else:
+            allocatedDatasets, logs = trueValueAllocation(dataset, logs)
     elif meta.loc['allocationType', 'value'] == 'allocatableFromWasteTreatment':
-        pass
+        raise NotImplementedError('To be implemented soon')
     elif meta.loc['allocationType', 'value'] == 'constrainedMarket':
-        pass
+        raise NotImplementedError('To be implemented soon')
     else:
         raise NotImplementedError('"%s" is not a recognized allocationType')
     for exchangeId in allocatedDatasets:
         allocatedDatasets[exchangeId] = osf.scaleDataset(allocatedDatasets[exchangeId])
-    if writeToExcelSwitch:
-        osf.writeDatasetToExcel(allocatedMeta.copy(), resultFolder, allocatedQuantitative, 
-            masterData, activityOverview, cuteName = cuteName)
-    if validateAgainstMatrixSwitch:
-        logs = osf.validateAgainstMatrix(ie_index, allocatedQuantitative, 
-            ee_index, B, allocatedMeta, masterData, logs)
-allocatedDatasetsBeforeMerge = {}
-writeToExcelSwitch = False
-for exchangeId in allocatedDatasets:
-    meta = allocatedDatasets[exchangeId]['meta']
-    quantitative = allocatedDatasets[exchangeId]['quantitative']
-    allocatedDatasetsBeforeMerge_, logs = economicAllocation(meta, quantitative, masterData, ie_index, 
-        ee_index, B, validateAgainstMatrixSwitch, cuteName, logs, resultFolder, writeToExcelSwitch)
-    for exchangeId_ in allocatedDatasetsBeforeMerge_:
-        if exchangeId_ not in allocatedDatasetsBeforeMerge:
-            allocatedDatasetsBeforeMerge[exchangeId_] = {}
-        allocatedDatasetsBeforeMerge[exchangeId_][exchangeId
-            ] = allocatedDatasetsBeforeMerge_[exchangeId_]
-allocatedDatasetsAfterMerge = {}
-for exchangeId_ in allocatedDatasetsBeforeMerge:
-    if len(allocatedDatasetsBeforeMerge[exchangeId_]) == 1:
-        exchangeId = allocatedDatasetsBeforeMerge[exchangeId_].keys()[0]
-        allocatedDatasetsAfterMerge[exchangeId_] = deepcopy(allocatedDatasetsBeforeMerge[
-            exchangeId_][exchangeId])
-    else:
-        1/0
-        
-    
+        if writeToExcelSwitch:
+            osf.writeDatasetToExcel(allocatedDatasets[exchangeId], resultFolder, 
+                masterData, activityOverview, cuteName = cuteName)
+        if validateAgainstMatrixSwitch:
+            logs = osf.validateAgainstMatrix(ie_index, allocatedDatasets[exchangeId], 
+                ee_index, B, masterData, logs)
 print time.time() - start, 'seconds'
 osf.closeLogs(logs)
