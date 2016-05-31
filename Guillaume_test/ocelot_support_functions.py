@@ -196,6 +196,7 @@ def estimate_time(start, counter, max_counter):
 def nonAllocatableByProductFlip(dataset, masterData, logs):
     #joining with masterData to get the classification
     quantitative = dataset['quantitative']
+    quantitative['original index'] = list(quantitative.index)
     quantitative = quantitative.set_index('exchangeId')
     quantitative = quantitative.join(masterData['intermediateExchange'][['classification']])
     quantitative = quantitative.reset_index().rename(columns = {'index': 'exchangeId'})
@@ -209,6 +210,12 @@ def nonAllocatableByProductFlip(dataset, masterData, logs):
     toFlipIndexes = list(toFlip.index)
     quantitative.loc[toFlipIndexes, 'amount'] = -quantitative.loc[toFlipIndexes, 'amount']
     #do something with logs
+    #reset index to what they were
+    quantitative.index = quantitative['original index']
+    del quantitative['original index']
+    #remove PV of what is now FromTechnosphere exchanges
+    conditions = ~((quantitative['valueType'] == 'ProductionVolume') & (quantitative['group'] == 'FromTechnosphere'))
+    quantitative = quantitative[conditions]
     dataset['quantitative'] = quantitative
     return dataset, logs
 def recalculateUncertainty(quantitative):

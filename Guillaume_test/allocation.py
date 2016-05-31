@@ -232,8 +232,6 @@ def combinedProduction(dataset, logs, masterData):
             ] / abs(quantitative.loc[chosenReferenceProductIndex, 'amount'])
         allocatedDatasets[allocatedMeta.loc['mainReferenceProductId', 'value']] = {
             'meta': allocatedMeta.copy(), 'quantitative': allocatedQuantitative.copy()}
-    #if 'WithByProduct' in meta.loc['allocationType', 'value']:
-    #    1/0
     return allocatedDatasets, logs
 def mergeCombinedProductionWithByProduct(allocatedDatasets, logs):
     allocatedDatasetsBeforeMerge = {}
@@ -350,7 +348,7 @@ logs = osf.initializeLogs(logFolder, 'allocation')
 start = time.time()
 counter = 0
 #for dataset in datasets:
-for filename in ['3e841e74-a54b-4534-8248-7736542098ad_1125e767-7b5d-442e-81d6-9b0d3e1919ac']:
+for filename in ['c966a940-1c77-4a23-9287-39b0e0c85998_13534fe4-363f-4306-9f67-9d3ca1140e58']:
     dataset = datasets[filename]
     meta = dataset['meta']
     print meta.loc['activityName', 'value'], meta.loc['geography', 'value']
@@ -373,6 +371,7 @@ for filename in ['3e841e74-a54b-4534-8248-7736542098ad_1125e767-7b5d-442e-81d6-9
         else:
             allocatedDatasets, logs = trueValueAllocation(dataset, logs)
     elif meta.loc['allocationType', 'value'] == 'allocatableFromWasteTreatment':
+        
         raise NotImplementedError('To be implemented soon')
     elif meta.loc['allocationType', 'value'] == 'constrainedMarket':
         raise NotImplementedError('To be implemented soon')

@@ -554,7 +554,7 @@ activityLinks = {}
 datasets = {}
 counter = 0
 start = time.time()
-#filelist = ['a6bbe7bb-7b64-4da5-be96-6ba658055690_e6aad2de-0b1b-49c3-a0c4-797ba34d87e5.spold']
+filelist = ['c66d8d9e-c8b2-462b-93fc-d24279017985_eec52dcb-5b55-414a-81e3-b1331ff3462c.spold']
 for filename in filelist:
     counter += 1
     osf.estimate_time(start, counter, len(filelist))
@@ -577,6 +577,7 @@ for filename in filelist:
     if 1: #meta.loc['filename', 'value'] == 'economicAllocation':
         datasets[filename.replace('.spold', '')] = {
             'meta': meta, 'quantitative': quantitative}
+1/0
 DB = writeDatabase(DBFilename, resultFolderDB, datasets, activityOverview, 
                   activityLinks, masterData)
 writeSupportExcel(resultFolderExcel, DB, DBFilename, resultFolderDB)
