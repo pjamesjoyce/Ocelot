@@ -193,10 +193,12 @@ def estimate_time(start, counter, max_counter):
         print h, 'hours and', m, 'minutes remaining'
     print per_iteration, 'seconds per iteration, average'
     return t
-def removeUnnecessaryPV(quantitative):
+def removeUnnecessaryPV(dataset):
+    quantitative = dataset['quantitative']
     conditions = ~((quantitative['valueType'] == 'ProductionVolume') & (quantitative['group'] == 'FromTechnosphere'))
     quantitative = quantitative[conditions]
-    return quantitative
+    dataset['quantitative'] = quantitative.copy()
+    return dataset
 def nonAllocatableByProductFlip(dataset, masterData, logs):
     #joining with masterData to get the classification
     quantitative = dataset['quantitative']
@@ -210,7 +212,6 @@ def nonAllocatableByProductFlip(dataset, masterData, logs):
     toFlipIndexes = list(toFlip.index)
     quantitative.loc[toFlipIndexes, 'amount'] = -quantitative.loc[toFlipIndexes, 'amount']
     #do something with logs
-    quantitative = removeUnnecessaryPV(quantitative)
     dataset['quantitative'] = quantitative
     return dataset, logs
 def recalculateUncertainty(quantitative):

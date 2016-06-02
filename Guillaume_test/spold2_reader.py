@@ -372,6 +372,12 @@ def readQuantitative(stem, masterData, meta, activityLinks):
             #only necessary for combined production
             assert 'parameter' in element.tag
             quantitative, masterData = readParameter(quantitative, element, masterData)
+        print len(quantitative), 
+        if len(quantitative) != 0:
+            print max(quantitative.keys())
+        else:
+            print 0
+        print ''
     #fill info about activityLink overview
     activityLinks = readActivityLinks(forActivityLinks, position_ref, 
         activityLinks, meta, quantitative)
@@ -553,7 +559,7 @@ activityLinks = {}
 datasets = {}
 counter = 0
 start = time.time()
-#filelist = ['1f89040d-a6db-4d92-9873-eba599e75bcd_b254bbdf-fb2b-4878-aec9-2a7820f3f32e.spold']
+filelist = ['a6bbe7bb-7b64-4da5-be96-6ba658055690_e6aad2de-0b1b-49c3-a0c4-797ba34d87e5.spold']
 for filename in filelist:
     counter += 1
     osf.estimate_time(start, counter, len(filelist))

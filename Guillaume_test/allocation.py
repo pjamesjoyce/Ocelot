@@ -207,10 +207,11 @@ def combinedProduction(dataset, logs, masterData):
         #recalculate
         allocatedQuantitative = recalculate(allocatedQuantitative)
         allocatedQuantitative = osf.recalculateUncertainty(allocatedQuantitative)
-        allocatedQuantitative['amount'] = allocatedQuantitative['calculated amount'
-            ] / abs(quantitative.loc[chosenReferenceProductIndex, 'amount'])
-        allocatedDatasets[allocatedMeta.loc['mainReferenceProductId', 'value']] = {
-            'meta': allocatedMeta.copy(), 'quantitative': allocatedQuantitative.copy()}
+        if quantitative.loc[chosenReferenceProductIndex, 'amount'] != 0.:
+            allocatedQuantitative['amount'] = allocatedQuantitative['calculated amount'
+                ] / abs(quantitative.loc[chosenReferenceProductIndex, 'amount'])
+            allocatedDatasets[allocatedMeta.loc['mainReferenceProductId', 'value']] = {
+                'meta': allocatedMeta.copy(), 'quantitative': allocatedQuantitative.copy()}
     return allocatedDatasets, logs
 def mergeCombinedProductionWithByProduct(allocatedDatasets, logs):
     allocatedDatasetsBeforeMerge = {}
@@ -390,15 +391,18 @@ def filterDatasets(datasets):
         len(datasets), len(filteredDatasets))
     return filteredDatasets
 def flipReferenceProductInTreatmentActivity(dataset, masterData, logs):
+    quantitative = dataset['quantitative']
     if dataset['meta'].loc['treatmentActivity', 'value']:
-        quantitative = dataset['quantitative']
         mainReferenceProductIsWaste = True
         mainReferenceProductIndex = dataset['meta'].loc['mainReferenceProductIndex', 'value']
         if quantitative.loc[mainReferenceProductIndex, 'classification'] != 'Waste':
             mainReferenceProductIsWaste = False
-            #flip this to FromTechnosphere
-            quantitative.loc[mainReferenceProductIndex, 'amount'] = -quantitative.loc[mainReferenceProductIndex, 'amount']
-            indexes = list(quantitative[quantitative['group'] == 'ReferenceProduct'].index)
+            indexes = quantitative[quantitative['group'] == 'ReferenceProduct']
+            indexes = list(indexes[indexes['amount'] < 0.].index)
+            quantitative.loc[indexes, 'amount'] = -quantitative.loc[indexes, 'amount']
+            exchangeIds = set(quantitative.loc[indexes, 'exchangeId'])
+            indexes = quantitative[quantitative['exchangeId'].isin(exchangeIds)]
+            indexes = list(indexes[indexes['group'] == 'ReferenceProduct'].index)
             quantitative.loc[indexes, 'group'] = 'FromTechnosphere'
             #do something with log
         dataset['meta'] = pd.concat([dataset['meta'], pd.DataFrame({
@@ -408,6 +412,12 @@ def flipReferenceProductInTreatmentActivity(dataset, masterData, logs):
             'mainReferenceProductIsWaste': {'value': False}}).transpose()])
     dataset['quantitative'] = quantitative.copy()
     return dataset, logs
+def constrainedMarketAllocation(dataset, logs):
+    dataset['quantitative'] = dataset['quantitative'][dataset['quantitative']['group'] != 'ByProduct']
+    allocatedDatasets = {dataset['meta'].loc['mainReferenceProductExchangeId', 'value']: 
+        {'meta': dataset['meta'].copy(), 'quantitative': dataset['quantitative'].copy()}}
+    #do something with logs
+    return allocatedDatasets, logs
 logFolder = r'C:\ocelot\logs'
 DBFolder = r'C:\ocelot\databases'
 DBName = 'ecoinvent32_internal.pkl'
@@ -415,8 +425,8 @@ resultFolder = r'C:\ocelot\excel\datasets'
 datasets, masterData, activityOverview, activityLinks = osf.openDB(DBFolder, DBName)
 #datasets = filterDatasets(datasets)
 matrixFolder = r'C:\python\DB_versions\3.2\cut-off\python variables'
-validateAgainstMatrixSwitch = False
-writeToExcelSwitch = False
+validateAgainstMatrixSwitch = True
+writeToExcelSwitch = True
 cuteName = True
 logs = osf.initializeLogs(logFolder, 'allocation')
 (A, B, C, ee_index, ee_list, ie_index, 
@@ -424,13 +434,15 @@ logs = osf.initializeLogs(logFolder, 'allocation')
             B_confidential_hidden) = osf.load_matrices(matrixFolder)
 start = time.time()
 counter = 0
-for filename in datasets:
-#for filename in ['d59e51c2-0432-4b6c-bd7a-d1fdc926d78f_18e1cfa1-498b-4d93-bace-44cd2ae12596']:
+#for filename in datasets:
+for filename in ['9c202395-4c52-4ba1-a92b-e665a4731e94_98d3683b-565f-492d-b2df-de9de017bb28']:
+    counter += 1
+    print counter
     dataset = datasets[filename]
-    dataset = osf.joinClassification(dataset, masterData)
     if 0:
         osf.writeDatasetToExcel(dataset, resultFolder, 
                 masterData, activityOverview, cuteName = False)
+    dataset = osf.joinClassification(dataset, masterData)
     print dataset['meta'].loc['activityName', 'value'], dataset['meta'].loc['geography', 'value']
     if dataset['meta'].loc['nonAllocatableByProduct', 'value']:
         dataset, logs = osf.nonAllocatableByProductFlip(dataset, masterData, logs)
@@ -443,20 +455,18 @@ for filename in datasets:
         if dataset['meta'].loc['allocationType', 'value'] == 'combinedProductionWithByProduct':
             allocatedDatasets, logs = mergeCombinedProductionWithByProduct(allocatedDatasets, logs)
     elif dataset['meta'].loc['allocationType', 'value'] == 'economicAllocation':
-        if not dataset['meta'].loc['treatmentActivity', 'value']:
-            allocatedDatasets, logs = economicAllocation(dataset, masterData, logs)
-        else:
-            raise NotImplementedError('To be implemented soon')
+        allocatedDatasets, logs = economicAllocation(dataset, masterData, logs)
     elif dataset['meta'].loc['allocationType', 'value'] == 'trueValueAllocation':
         allocatedDatasets, logs = trueValueAllocation(dataset, logs)
     elif dataset['meta'].loc['allocationType', 'value'] == 'allocatableFromWasteTreatment':
         allocatedDatasets, logs = allocationForAllocatableInWasteTreatment(dataset, logs, masterData)
     elif dataset['meta'].loc['allocationType', 'value'] == 'constrainedMarket':
-        raise NotImplementedError('To be implemented soon')
+        allocatedDatasets, logs = constrainedMarketAllocation(dataset, logs)
     else:
         raise NotImplementedError('"%s" is not a recognized allocationType')
     for exchangeId in allocatedDatasets:
         allocatedDatasets[exchangeId] = osf.scaleDataset(allocatedDatasets[exchangeId])
+        allocatedDatasets[exchangeId] = osf.removeUnnecessaryPV(allocatedDatasets[exchangeId])
         if writeToExcelSwitch:
             osf.writeDatasetToExcel(allocatedDatasets[exchangeId], resultFolder, 
                 masterData, activityOverview, cuteName = cuteName)
