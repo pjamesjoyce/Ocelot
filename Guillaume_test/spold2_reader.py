@@ -350,15 +350,14 @@ def readQuantitative(stem, masterData, meta, activityLinks):
                 if (to_add['group'] == 'ReferenceProduct' and 
                         quantitative[len(quantitative)-2]['amount'] != 0.):
                     position_ref = len(quantitative)-2
-            if meta['allocationType'] in ['noAllocation', 'allocatableFromWasteTreatment', 
-                    'constrainedMarket']:
+            if meta['allocationType'] in ['noAllocation', 'constrainedMarket']:
                 #nothing more required
                 pass
             elif 'combined' in meta['allocationType']:
                 #all properties required
                 quantitative, masterData = readProperty(quantitative, to_add, element, 
                     meta, masterData)
-            elif meta['allocationType'] == 'economicAllocation':
+            elif meta['allocationType'] in ['economicAllocation', 'allocatableFromWasteTreatment']:
                 #only price required
                 quantitative, masterData = readProperty(quantitative, to_add, element, 
                     meta, masterData, propertyFilter = ['price'])
@@ -554,7 +553,7 @@ activityLinks = {}
 datasets = {}
 counter = 0
 start = time.time()
-filelist = ['c66d8d9e-c8b2-462b-93fc-d24279017985_eec52dcb-5b55-414a-81e3-b1331ff3462c.spold']
+#filelist = ['1f89040d-a6db-4d92-9873-eba599e75bcd_b254bbdf-fb2b-4878-aec9-2a7820f3f32e.spold']
 for filename in filelist:
     counter += 1
     osf.estimate_time(start, counter, len(filelist))
@@ -577,7 +576,6 @@ for filename in filelist:
     if 1: #meta.loc['filename', 'value'] == 'economicAllocation':
         datasets[filename.replace('.spold', '')] = {
             'meta': meta, 'quantitative': quantitative}
-1/0
 DB = writeDatabase(DBFilename, resultFolderDB, datasets, activityOverview, 
                   activityLinks, masterData)
 writeSupportExcel(resultFolderExcel, DB, DBFilename, resultFolderDB)

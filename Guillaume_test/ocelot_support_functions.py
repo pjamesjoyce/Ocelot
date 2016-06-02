@@ -120,33 +120,33 @@ def prepareMeta(dataset, writer):
         pass
     meta = meta.loc[['filename', 'activityName', 'geography', 'startDate', 'endDate', 
       'specialActivityType', 'technologyLevel', 'accessRestrictedTo', 'allocationType', 
-      'treatmentActivity', 'wasteOutput', 'mainReferenceProductName']]
+      'treatmentActivity', 'nonAllocatableByProduct', 'mainReferenceProductName']]
     meta.reset_index().rename(columns = {'index': 'field'}
         ).to_excel(writer, 'meta', cols = ['field', 'value'], 
         merge_cells = False, index = False)
     return writer
-def prepareQuantitative(dataset, activityOverview, MD, writer):
+def prepareQuantitative(dataset, activityOverview, masterData, writer):
     quantitative = dataset['quantitative']
     properties = quantitative[quantitative['valueType'] == 'Property']
     indexes = set(quantitative.index).difference(set(properties.index))
     quantitative = quantitative.loc[indexes]
     if len(properties) > 0:
         properties = properties.set_index('propertyId')
-        properties = properties.join(MD['properties']).reset_index()
+        properties = properties.join(masterData['properties']).reset_index()
     ee = quantitative[quantitative['group'].isin(['FromEnvironment', 'ToEnvironment'])]
     ie = quantitative[quantitative['group'].isin(['ReferenceProduct', 'ByProduct', 'FromTechnosphere'])]
     parameters = quantitative[quantitative['valueType'] == 'Parameter']
     if len(parameters) > 0:
         parameters = parameters.set_index('parameterId')
-        parameters = parameters.join(MD['parameters']).reset_index()
+        parameters = parameters.join(masterData['parameters']).reset_index()
     if len(ee) > 0:
         ee = ee.set_index(['exchangeId', 'subcompartmentId'])
-        ee = ee.join(MD['elementaryExchange'][['name', 'compartment', 
+        ee = ee.join(masterData['elementaryExchange'][['name', 'compartment', 
                      'subcompartment', 'unit']]).reset_index()
         for col in ['activityLinkId']:
             del ee[col]
     ie = ie.set_index('exchangeId')
-    ie = ie.join(MD['intermediateExchange'][['name', 'unit']]).reset_index()
+    ie = ie.join(masterData['intermediateExchange'][['name', 'unit']]).reset_index()
     ie = ie.set_index('activityLinkId', 'name')
     ie = ie.join(activityOverview[['activityName', 'geography']]).reset_index()
     ie = ie.rename(columns = {'activityName': 'activityLink activityName', 
@@ -154,7 +154,7 @@ def prepareQuantitative(dataset, activityOverview, MD, writer):
     for col in ['level_0', 'index']:
         del ie[col]
     quantitative = pd.concat([ie, ee])
-    cols = ['valueType', 'Ref', 'group', 'name', 'compartment', 'subcompartment', 
+    cols = ['valueType', 'Ref', 'group', 'name', 'compartment', 'subcompartment', 'classification', 
             'activityLink activityName', 'activityLink geography', 'propertyName', 
             'parameterName', 'amount', 'unit', 'variableName', 'mathematicalRelation', 
             'uncertaintyType', 'meanValue', 'minValue', 'mostLikelyValue', 
@@ -193,13 +193,13 @@ def estimate_time(start, counter, max_counter):
         print h, 'hours and', m, 'minutes remaining'
     print per_iteration, 'seconds per iteration, average'
     return t
+def removeUnnecessaryPV(quantitative):
+    conditions = ~((quantitative['valueType'] == 'ProductionVolume') & (quantitative['group'] == 'FromTechnosphere'))
+    quantitative = quantitative[conditions]
+    return quantitative
 def nonAllocatableByProductFlip(dataset, masterData, logs):
     #joining with masterData to get the classification
     quantitative = dataset['quantitative']
-    quantitative['original index'] = list(quantitative.index)
-    quantitative = quantitative.set_index('exchangeId')
-    quantitative = quantitative.join(masterData['intermediateExchange'][['classification']])
-    quantitative = quantitative.reset_index().rename(columns = {'index': 'exchangeId'})
     #all waste in byproduct should be labeled FromTechnosphere
     toFlip = quantitative[quantitative['group'] == 'ByProduct']
     toFlip = toFlip[toFlip['classification'].isin(['Waste', 'Recyclable'])]
@@ -210,12 +210,7 @@ def nonAllocatableByProductFlip(dataset, masterData, logs):
     toFlipIndexes = list(toFlip.index)
     quantitative.loc[toFlipIndexes, 'amount'] = -quantitative.loc[toFlipIndexes, 'amount']
     #do something with logs
-    #reset index to what they were
-    quantitative.index = quantitative['original index']
-    del quantitative['original index']
-    #remove PV of what is now FromTechnosphere exchanges
-    conditions = ~((quantitative['valueType'] == 'ProductionVolume') & (quantitative['group'] == 'FromTechnosphere'))
-    quantitative = quantitative[conditions]
+    quantitative = removeUnnecessaryPV(quantitative)
     dataset['quantitative'] = quantitative
     return dataset, logs
 def recalculateUncertainty(quantitative):
@@ -250,7 +245,7 @@ def validateAgainstMatrix(ie_index, dataset, ee_index, B, masterData,
                         if test > 1.005 or test < .995:
                             message = 'matrix amount = %s, calculated amount = %s, ratio = %s' % (
                             matrixAmount, sel['amount'], test)
-                    else:
+                    elif abs(sel['amount']) > 1.0e-15:
                         message = 'matrix amount = %s, calculated amount = %s' % (
                             matrixAmount, sel['amount'])
                     if message != '':
@@ -305,3 +300,13 @@ def selectExchangesToTechnosphere(quantitative):
     sel = quantitative[quantitative['valueType'] == 'Exchange']
     sel = sel[sel['group'].isin(['ByProduct', 'ReferenceProduct'])]
     return sel
+def joinClassification(dataset, masterData):
+    if 'classification' not in dataset['quantitative'].columns:
+        dataset['quantitative']['original index'] = list(dataset['quantitative'].index)
+        dataset['quantitative'] = dataset['quantitative'].set_index('exchangeId')
+        dataset['quantitative'] = dataset['quantitative'].join(masterData['intermediateExchange'
+            ][['classification']]).reset_index()
+        dataset['quantitative'].index = list(dataset['quantitative']['original index'])
+        del dataset['quantitative']['original index']
+        dataset['quantitative'] = dataset['quantitative'].rename(columns = {'index': 'exchangeId'})
+    return dataset
