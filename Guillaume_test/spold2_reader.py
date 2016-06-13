@@ -232,11 +232,10 @@ def findAllocationType(meta, stem):
     toTechnospheres = {} #to be filled for activityOverview
     hasTrueValue = False
     maxAmount = 0.
-    meta['nonAllocatableByProduct'] = False
-    meta['treatmentActivity'] = False
+    meta['hasNonAllocatableByProduct'] = False
+    meta['hasNegativeReferenceProduct'] = False
     nbReferenceProducts = 0
     nbAllocatableByProducts = 0
-    nbNonAllocatableByProducts = 0
     hasConditionalExchange = False
     for exc in stem.flowData.iterchildren(tag = osf.tag_prefix + 'intermediateExchange'):
         amount = float(exc.get('amount'))
@@ -261,18 +260,21 @@ def findAllocationType(meta, stem):
             if amount != 0.:
                 if to_add['group'] == 'ReferenceProduct':
                     nbReferenceProducts += 1
-                    if amount < 0. and meta['specialActivityType'] == '0':
-                        meta['treatmentActivity'] = True
+                    if amount < 0.:
+                        referenceProductAmountSign = -1
+                        meta['hasNegativeReferenceProduct'] = True
+                    else:
+                        referenceProductAmountSign = 1
                     if maxAmount == 0.:
                         maxAmount = copy(amount)
                         mainReferenceProduct = deepcopy(exc)
                     elif amount > maxAmount:
                         maxAmount = copy(amount)
                         mainReferenceProduct = deepcopy(exc)
+                    referenceProductClassification = copy(to_add['classification'])
                 else:
                     if to_add['classification'] != 'allocatable product':
-                        meta['nonAllocatableByProduct'] = True
-                        nbNonAllocatableByProducts += 1
+                        meta['hasNonAllocatableByProduct'] = True
                     else:
                         nbAllocatableByProducts += 1
                     if (exc.get('activityLinkId') != None and 
@@ -299,13 +301,16 @@ def findAllocationType(meta, stem):
                 meta['allocationType'] = 'combinedProductionWithoutByProduct'
             if hasTrueValue:
                 raise NotImplementedError('allocationType not recognized')
-        elif hasTrueValue:
-            meta['allocationType'] = 'trueValueAllocation'
-        else:
-            if meta['treatmentActivity']:
-                meta['allocationType'] = 'allocatableFromWasteTreatment'
+        elif referenceProductAmountSign == 1:
+            if hasTrueValue:
+                meta['allocationType'] = 'trueValueAllocation'
             else:
                 meta['allocationType'] = 'economicAllocation'
+        else: #treatment
+            if referenceProductClassification == 'Waste':
+                meta['allocationType'] = 'wasteTreatment'
+            else:
+                meta['allocationType'] = 'recyclingActivity'
     meta['mainReferenceProductName'] = copy(mainReferenceProduct.name.text)
     meta['mainReferenceProductExchangeId'] = mainReferenceProduct.get('intermediateExchangeId')
     toTechnospheres = pd.DataFrame(toTechnospheres).transpose()

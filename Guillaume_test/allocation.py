@@ -144,8 +144,6 @@ def findEconomicAllocationFactors(quantitative, masterData):
         ['ByProduct', 'ReferenceProduct'])]
     allocationFactors = allocationFactors.rename(columns = {'amount': 'price'})
     allocationFactors = allocationFactors[['exchangeId', 'price']].set_index('exchangeId')
-    allocationFactors = allocationFactors.join(
-        masterData['intermediateExchange'][['classification']])
     allocationFactors = allocationFactors[allocationFactors[
         'classification'] == 'allocatable product']
     sel = osf.selectExchangesToTechnosphere(quantitative)
@@ -187,24 +185,8 @@ def combinedProduction(dataset, logs, masterData):
     quantitative = calculationOrder(quantitative, graph)
     allocatedDatasets = {}
     for chosenReferenceProductIndex in referenceProductIndexes:
-        #update meta
-        allocatedMeta = meta.copy()
-        allocatedMeta.loc['mainReferenceProductId', 'value'] = quantitative.loc[
-            chosenReferenceProductIndex, 'exchangeId']
-        allocatedMeta.loc['mainReferenceProductIndex', 'value'] = copy(chosenReferenceProductIndex)
-        allocatedMeta.loc['mainReferenceProductName', 'value'] = masterData['intermediateExchange'
-            ].loc[allocatedMeta.loc['mainReferenceProductId', 'value'], 'name']
-        allocatedQuantitative = quantitative.copy()
-        #put to zero the amount of the exchange and PV of the other reference products
-        otherReferenceProductIndexes = copy(referenceProductIndexes)
-        otherReferenceProductIndexes.remove(chosenReferenceProductIndex)
-        otherReferenceProductIds = set(quantitative.loc[otherReferenceProductIndexes, 'exchangeId'])
-        toSetToZeroIndexes = quantitative[quantitative['exchangeId'].isin(otherReferenceProductIds)]
-        toSetToZeroIndexes = toSetToZeroIndexes[toSetToZeroIndexes['valueType'].isin(
-            ['Exchange', 'ProductionVolume'])]
-        toSetToZeroIndexes = list(toSetToZeroIndexes.index)
-        allocatedQuantitative.loc[toSetToZeroIndexes, 'amount'] = 0.
-        #recalculate
+        chosenProductExchangeId = quantitative.loc[chosenReferenceProductIndex, 'exchangeId']
+        allocatedQuantitative, allocatedMeta = makeReferenceProduct(chosenProductExchangeId, quantitative, meta, masterData)
         allocatedQuantitative = recalculate(allocatedQuantitative)
         allocatedQuantitative = osf.recalculateUncertainty(allocatedQuantitative)
         if quantitative.loc[chosenReferenceProductIndex, 'amount'] != 0.:
@@ -267,6 +249,8 @@ def mergeCombinedProductionWithByProduct(allocatedDatasets, logs):
                 'intermediateExchange'].loc[exchangeId, 'name']
             allocatedDatasets[exchangeId_] = {'meta': allocatedMeta, 
                 'quantitative': quantitativeMerged}
+            if quantitativeMerged.loc[index, 'amount'] < 0.:
+                1/0 #to be tested
     return allocatedDatasets, logs
 def economicAllocation(dataset, masterData, logs):
     allocationFactors = findEconomicAllocationFactors(dataset['quantitative'], masterData)
@@ -339,33 +323,41 @@ def makeReferenceProduct(chosenProductExchangeId, quantitative, meta, masterData
         allocatedQuantitative['group'] != 'ReferenceProduct'))
     allocatedQuantitative = allocatedQuantitative[conditions]
     return allocatedQuantitative, allocatedMeta
-def allocationForAllocatableInWasteTreatment(dataset, logs, masterData):
+def wasteTreatment(dataset, logs, masterData):
     meta = dataset['meta']
     quantitative = dataset['quantitative']
-    allocatedDatasets = {}
-    if meta.loc['mainReferenceProductIsWaste', 'value']:
-        exchangesToTechnosphere = osf.selectExchangesToTechnosphere(quantitative)
-        for chosenProductExchangeId in list(exchangesToTechnosphere['exchangeId']):
-            if masterData['intermediateExchange'].loc[chosenProductExchangeId, 'classification'] == 'Recyclable':
-                raise NotImplementedError('This should not happen')
-            elif masterData['intermediateExchange'].loc[chosenProductExchangeId, 'classification'] == 'allocatable product':
-                allocatedQuantitative, allocatedMeta = makeReferenceProduct(
+    #first dataset: the treatment of the waste itself
+    chosenProductExchangeId = meta.loc['mainReferenceProductExchangeId']
+    allocatedQuantitative, allocatedMeta = makeReferenceProduct(
                     chosenProductExchangeId, quantitative, meta, masterData)
-                #put to zero all other exchange amount
-                indexes = allocatedQuantitative[allocatedQuantitative['group'] != 'ReferenceProduct']
-                indexes = list(indexes[indexes['valueType'] == 'Exchange'].index)
-                allocatedQuantitative.loc[indexes, 'amount'] = 0.
-                allocatedDatasets[chosenProductExchangeId] = {'meta': allocatedMeta.copy(), 
-                    'quantitative': allocatedQuantitative.copy()}
-                indexes = quantitative[quantitative['group'].isin(['ReferenceProduct', 'ByProduct'])]
-                indexes = list(indexes[indexes['exchangeId'] == chosenProductExchangeId].index)
-                #remove this product from the remaining quantitative information, for potential further allocation
-                quantitative = quantitative[~quantitative.index.isin(indexes)]
-                quantitative[quantitative.index.isin(indexes)]
-        exchangesToTechnosphere = osf.selectExchangesToTechnosphere(quantitative)
-        if len(exchangesToTechnosphere) != 1:
-            raise NotImplementedError('This should not happend')
+    allocatedDatasets = {chosenProductExchangeId: {'meta': allocatedMeta.copy(), 
+        'quantitative': allocatedQuantitative.copy()}}
+    #write in logs
+    #if there are non waste byproducts
+    #put to zero all all the other exchanges
+    indexes = quantitative[quantitative['group'] != 'ReferenceProduct']
+    indexes = list(indexes[indexes['valueType'] == 'Exchange'].index)
+    quantitative.loc[indexes, 'amount'] = 0.
+    sel = quantitative[quantitative['group'] == 'ByProduct']
+    byProductIds = set(sel['exchangeId'])
+    for chosenProductExchangeId in byProductIds:
+        allocatedQuantitative, allocatedMeta = makeReferenceProduct(
+            chosenProductExchangeId, quantitative, meta, masterData)
+        allocatedDatasets[chosenProductExchangeId] = {'meta': allocatedMeta.copy(), 
+            'quantitative': allocatedQuantitative.copy()}
+        #write in logs
+    return allocatedDatasets, logs
+def recyclingActivity(dataset, logs, masterData):
+    quantitative = dataset['quantitative']
+    meta = dataset['meta']
+    #flip the reference product
+    indexes = list(quantitative[quantitative['group'] == 'ReferenceProduct'].index)
+    quantitative.loc[indexes, 'group'] = 'FromTechnosphere'
+    index = meta['mainReferenceProductIndex', 'value']
+    quantitative.loc[index, 'amount'] = -quantitative.loc[index, 'amount']
+    sel = osf.selectExchangesToTechnosphere(quantitative)
     exchangesToTechnosphere = osf.selectExchangesToTechnosphere(quantitative)
+    allocatedDatasets = {}
     if len(exchangesToTechnosphere) == 1:
         #no need for allocation
         for chosenProductExchangeId in list(exchangesToTechnosphere['exchangeId']):
@@ -374,10 +366,16 @@ def allocationForAllocatableInWasteTreatment(dataset, logs, masterData):
             allocatedDatasets[chosenProductExchangeId] = {
                 'meta': allocatedMeta.copy(), 'quantitative': allocatedQuantitative.copy()}
     else:
-        #economic allocation
         datasetBeforeEconomicAllocation = {'meta': meta, 'quantitative': quantitative}
-        allocatedDatasets, logs = economicAllocation(
-            datasetBeforeEconomicAllocation, masterData, logs)
+        sel = quantitative[quantitative['group'] == 'ByProduct']
+        if '7a3978ea-3e26-4329-bc8b-0915d58a7e6f' in set(sel['propertyId']):
+            #true value allocation.  Does not happen, but would work
+            allocationFactors = findTrueValueAllocationFactors(dataset)
+        else:
+            #economic allocation
+            allocationFactors = findEconomicAllocationFactors(quantitative, masterData)
+        allocatedDatasets, logs = allocateWithFactors(datasetBeforeEconomicAllocation, 
+            allocationFactors, logs, economicAllocation)
     return allocatedDatasets, logs
 def filterDatasets(datasets):
     filteredDatasets = {}
@@ -390,28 +388,6 @@ def filterDatasets(datasets):
     print 'before filtering: %s datasets.  after filtering: %s datasets' % (
         len(datasets), len(filteredDatasets))
     return filteredDatasets
-def flipReferenceProductInTreatmentActivity(dataset, masterData, logs):
-    quantitative = dataset['quantitative']
-    if dataset['meta'].loc['treatmentActivity', 'value']:
-        mainReferenceProductIsWaste = True
-        mainReferenceProductIndex = dataset['meta'].loc['mainReferenceProductIndex', 'value']
-        if quantitative.loc[mainReferenceProductIndex, 'classification'] != 'Waste':
-            mainReferenceProductIsWaste = False
-            indexes = quantitative[quantitative['group'] == 'ReferenceProduct']
-            indexes = list(indexes[indexes['amount'] < 0.].index)
-            quantitative.loc[indexes, 'amount'] = -quantitative.loc[indexes, 'amount']
-            exchangeIds = set(quantitative.loc[indexes, 'exchangeId'])
-            indexes = quantitative[quantitative['exchangeId'].isin(exchangeIds)]
-            indexes = list(indexes[indexes['group'] == 'ReferenceProduct'].index)
-            quantitative.loc[indexes, 'group'] = 'FromTechnosphere'
-            #do something with log
-        dataset['meta'] = pd.concat([dataset['meta'], pd.DataFrame({
-            'mainReferenceProductIsWaste': {'value': mainReferenceProductIsWaste}}).transpose()])
-    else:
-        dataset['meta'] = pd.concat([dataset['meta'], pd.DataFrame({
-            'mainReferenceProductIsWaste': {'value': False}}).transpose()])
-    dataset['quantitative'] = quantitative.copy()
-    return dataset, logs
 def constrainedMarketAllocation(dataset, logs):
     dataset['quantitative'] = dataset['quantitative'][dataset['quantitative']['group'] != 'ByProduct']
     allocatedDatasets = {dataset['meta'].loc['mainReferenceProductExchangeId', 'value']: 
@@ -425,8 +401,8 @@ resultFolder = r'C:\ocelot\excel\datasets'
 datasets, masterData, activityOverview, activityLinks = osf.openDB(DBFolder, DBName)
 #datasets = filterDatasets(datasets)
 matrixFolder = r'C:\python\DB_versions\3.2\cut-off\python variables'
-validateAgainstMatrixSwitch = True
-writeToExcelSwitch = True
+validateAgainstMatrixSwitch = False
+writeToExcelSwitch = False
 cuteName = True
 logs = osf.initializeLogs(logFolder, 'allocation')
 (A, B, C, ee_index, ee_list, ie_index, 
@@ -434,8 +410,8 @@ logs = osf.initializeLogs(logFolder, 'allocation')
             B_confidential_hidden) = osf.load_matrices(matrixFolder)
 start = time.time()
 counter = 0
-#for filename in datasets:
-for filename in ['9c202395-4c52-4ba1-a92b-e665a4731e94_98d3683b-565f-492d-b2df-de9de017bb28']:
+for filename in datasets:
+#for filename in ['9c202395-4c52-4ba1-a92b-e665a4731e94_98d3683b-565f-492d-b2df-de9de017bb28']:
     counter += 1
     print counter
     dataset = datasets[filename]
@@ -446,7 +422,6 @@ for filename in ['9c202395-4c52-4ba1-a92b-e665a4731e94_98d3683b-565f-492d-b2df-d
     print dataset['meta'].loc['activityName', 'value'], dataset['meta'].loc['geography', 'value']
     if dataset['meta'].loc['nonAllocatableByProduct', 'value']:
         dataset, logs = osf.nonAllocatableByProductFlip(dataset, masterData, logs)
-    dataset, logs = flipReferenceProductInTreatmentActivity(dataset, masterData, logs)
     if dataset['meta'].loc['allocationType', 'value'] == 'noAllocation':
         allocatedDatasets = {dataset['meta'].loc['mainReferenceProductExchangeId', 'value']: 
             {'meta': dataset['meta'].copy(), 'quantitative': dataset['quantitative'].copy()}}
@@ -458,8 +433,10 @@ for filename in ['9c202395-4c52-4ba1-a92b-e665a4731e94_98d3683b-565f-492d-b2df-d
         allocatedDatasets, logs = economicAllocation(dataset, masterData, logs)
     elif dataset['meta'].loc['allocationType', 'value'] == 'trueValueAllocation':
         allocatedDatasets, logs = trueValueAllocation(dataset, logs)
-    elif dataset['meta'].loc['allocationType', 'value'] == 'allocatableFromWasteTreatment':
-        allocatedDatasets, logs = allocationForAllocatableInWasteTreatment(dataset, logs, masterData)
+    elif dataset['meta'].loc['allocationType', 'value'] == 'wasteTreatment':
+        allocatedDatasets, logs = wasteTreatment(dataset, logs, masterData)
+    elif dataset['meta'].loc['allocationType', 'value'] == 'recyclingActivity':
+        allocatedDatasets, logs = recyclingActivity(dataset, logs, masterData)
     elif dataset['meta'].loc['allocationType', 'value'] == 'constrainedMarket':
         allocatedDatasets, logs = constrainedMarketAllocation(dataset, logs)
     else:
