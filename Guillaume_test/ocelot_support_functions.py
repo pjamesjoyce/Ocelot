@@ -8,19 +8,19 @@ from cPickle import load
 import time
 import io
 tag_prefix = '{http://www.EcoInvent.org/EcoSpold02}'
-technologyLevels = {'0': 'Undefined', 
-                    '1': 'New', 
-                    '2': 'Modern', 
-                    '3': 'Current', 
-                    '4': 'Old', 
-                    '5': 'Outdated'}
-specialActivityTypes = {'0': 'ordinary transforming activity', 
-                        '1': 'market activity', 
-                        '10': 'market group'}
-accessRestrictedTos = {'0': 'Public', 
-                    '1': 'Licensee', 
-                    '2': 'Results', 
-                    '3': 'Restricted', 
+technologyLevels = {0: 'Undefined', 
+                    1: 'New', 
+                    2: 'Modern', 
+                    3: 'Current', 
+                    4: 'Old', 
+                    5: 'Outdated'}
+specialActivityTypes = {0: 'ordinary transforming activity', 
+                        1: 'market activity', 
+                        10: 'market group'}
+accessRestrictedTos = {0: 'Public', 
+                    1: 'Licensee', 
+                    2: 'Results', 
+                    3: 'Restricted', 
                     None: ''}
 def ie_name_chop(ie):
     #input is a simapro format name
@@ -118,9 +118,10 @@ def prepareMeta(dataset, writer):
             meta.loc['accessRestrictedTo', 'value']]
     except KeyError:
         pass
-    meta = meta.loc[['filename', 'activityName', 'geography', 'startDate', 'endDate', 
+    meta = meta.loc[['filename', 'activityName', 'geography', 'mainReferenceProductName', 
+                     'startDate', 'endDate', 
       'specialActivityType', 'technologyLevel', 'accessRestrictedTo', 'allocationType', 
-      'treatmentActivity', 'nonAllocatableByProduct', 'mainReferenceProductName']]
+      'hasNonAllocatableByProduct', 'lastOperationPerformed']]
     meta.reset_index().rename(columns = {'index': 'field'}
         ).to_excel(writer, 'meta', cols = ['field', 'value'], 
         merge_cells = False, index = False)

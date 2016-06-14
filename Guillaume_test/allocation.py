@@ -143,7 +143,7 @@ def findEconomicAllocationFactors(quantitative, masterData):
     allocationFactors = allocationFactors[allocationFactors['group'].isin(
         ['ByProduct', 'ReferenceProduct'])]
     allocationFactors = allocationFactors.rename(columns = {'amount': 'price'})
-    allocationFactors = allocationFactors[['exchangeId', 'price']].set_index('exchangeId')
+    allocationFactors = allocationFactors[['exchangeId', 'price', 'classification']].set_index('exchangeId')
     allocationFactors = allocationFactors[allocationFactors[
         'classification'] == 'allocatable product']
     sel = osf.selectExchangesToTechnosphere(quantitative)
@@ -327,7 +327,7 @@ def wasteTreatment(dataset, logs, masterData):
     meta = dataset['meta']
     quantitative = dataset['quantitative']
     #first dataset: the treatment of the waste itself
-    chosenProductExchangeId = meta.loc['mainReferenceProductExchangeId']
+    chosenProductExchangeId = meta.loc['mainReferenceProductExchangeId', 'value']
     allocatedQuantitative, allocatedMeta = makeReferenceProduct(
                     chosenProductExchangeId, quantitative, meta, masterData)
     allocatedDatasets = {chosenProductExchangeId: {'meta': allocatedMeta.copy(), 
@@ -335,7 +335,7 @@ def wasteTreatment(dataset, logs, masterData):
     #write in logs
     #if there are non waste byproducts
     #put to zero all all the other exchanges
-    indexes = quantitative[quantitative['group'] != 'ReferenceProduct']
+    indexes = quantitative[quantitative['group'] != 'ByProduct']
     indexes = list(indexes[indexes['valueType'] == 'Exchange'].index)
     quantitative.loc[indexes, 'amount'] = 0.
     sel = quantitative[quantitative['group'] == 'ByProduct']
@@ -350,10 +350,10 @@ def wasteTreatment(dataset, logs, masterData):
 def recyclingActivity(dataset, logs, masterData):
     quantitative = dataset['quantitative']
     meta = dataset['meta']
-    #flip the reference product
+    #flip the reference product to FromTechnosphere
     indexes = list(quantitative[quantitative['group'] == 'ReferenceProduct'].index)
     quantitative.loc[indexes, 'group'] = 'FromTechnosphere'
-    index = meta['mainReferenceProductIndex', 'value']
+    index = meta.loc['mainReferenceProductIndex', 'value']
     quantitative.loc[index, 'amount'] = -quantitative.loc[index, 'amount']
     sel = osf.selectExchangesToTechnosphere(quantitative)
     exchangesToTechnosphere = osf.selectExchangesToTechnosphere(quantitative)
@@ -365,6 +365,7 @@ def recyclingActivity(dataset, logs, masterData):
                 quantitative, meta, masterData)
             allocatedDatasets[chosenProductExchangeId] = {
                 'meta': allocatedMeta.copy(), 'quantitative': allocatedQuantitative.copy()}
+        allocationFactors = ''
     else:
         datasetBeforeEconomicAllocation = {'meta': meta, 'quantitative': quantitative}
         sel = quantitative[quantitative['group'] == 'ByProduct']
@@ -376,13 +377,13 @@ def recyclingActivity(dataset, logs, masterData):
             allocationFactors = findEconomicAllocationFactors(quantitative, masterData)
         allocatedDatasets, logs = allocateWithFactors(datasetBeforeEconomicAllocation, 
             allocationFactors, logs, economicAllocation)
-    return allocatedDatasets, logs
+    return allocatedDatasets, logs, allocationFactors
 def filterDatasets(datasets):
     filteredDatasets = {}
     for filename in datasets:
         dataset = datasets[filename]
         meta = dataset['meta']
-        if meta.loc['allocationType', 'value'] == 'allocatableFromWasteTreatment':
+        if meta.loc['allocationType', 'value'] == 'wasteTreatment':
             filteredDatasets[filename] = {'meta': meta.copy(), 
                 'quantitative': datasets[filename]['quantitative'].copy()}
     print 'before filtering: %s datasets.  after filtering: %s datasets' % (
@@ -399,10 +400,10 @@ DBFolder = r'C:\ocelot\databases'
 DBName = 'ecoinvent32_internal.pkl'
 resultFolder = r'C:\ocelot\excel\datasets'
 datasets, masterData, activityOverview, activityLinks = osf.openDB(DBFolder, DBName)
-#datasets = filterDatasets(datasets)
+datasets = filterDatasets(datasets)
 matrixFolder = r'C:\python\DB_versions\3.2\cut-off\python variables'
-validateAgainstMatrixSwitch = False
-writeToExcelSwitch = False
+validateAgainstMatrixSwitch = True
+writeToExcelSwitch = True
 cuteName = True
 logs = osf.initializeLogs(logFolder, 'allocation')
 (A, B, C, ee_index, ee_list, ie_index, 
@@ -411,16 +412,16 @@ logs = osf.initializeLogs(logFolder, 'allocation')
 start = time.time()
 counter = 0
 for filename in datasets:
-#for filename in ['9c202395-4c52-4ba1-a92b-e665a4731e94_98d3683b-565f-492d-b2df-de9de017bb28']:
+#for filename in ['8bdc23a2-b32f-4826-80f8-bfabe42a90d9_47ff0220-6194-47f6-8bfe-6be6fb39b484']:
     counter += 1
-    print counter
+    print counter, 'of', len(datasets)
     dataset = datasets[filename]
     if 0:
         osf.writeDatasetToExcel(dataset, resultFolder, 
                 masterData, activityOverview, cuteName = False)
     dataset = osf.joinClassification(dataset, masterData)
     print dataset['meta'].loc['activityName', 'value'], dataset['meta'].loc['geography', 'value']
-    if dataset['meta'].loc['nonAllocatableByProduct', 'value']:
+    if dataset['meta'].loc['hasNonAllocatableByProduct', 'value']:
         dataset, logs = osf.nonAllocatableByProductFlip(dataset, masterData, logs)
     if dataset['meta'].loc['allocationType', 'value'] == 'noAllocation':
         allocatedDatasets = {dataset['meta'].loc['mainReferenceProductExchangeId', 'value']: 
@@ -436,7 +437,7 @@ for filename in datasets:
     elif dataset['meta'].loc['allocationType', 'value'] == 'wasteTreatment':
         allocatedDatasets, logs = wasteTreatment(dataset, logs, masterData)
     elif dataset['meta'].loc['allocationType', 'value'] == 'recyclingActivity':
-        allocatedDatasets, logs = recyclingActivity(dataset, logs, masterData)
+        allocatedDatasets, logs, allocationFactors = recyclingActivity(dataset, logs, masterData)
     elif dataset['meta'].loc['allocationType', 'value'] == 'constrainedMarket':
         allocatedDatasets, logs = constrainedMarketAllocation(dataset, logs)
     else:
@@ -444,6 +445,8 @@ for filename in datasets:
     for exchangeId in allocatedDatasets:
         allocatedDatasets[exchangeId] = osf.scaleDataset(allocatedDatasets[exchangeId])
         allocatedDatasets[exchangeId] = osf.removeUnnecessaryPV(allocatedDatasets[exchangeId])
+        allocatedDatasets[exchangeId]['meta'] = pd.concat([allocatedDatasets[exchangeId]['meta'], 
+            pd.DataFrame({'lastOperationPerformed': {'value': 'allocation'}}).transpose()])
         if writeToExcelSwitch:
             osf.writeDatasetToExcel(allocatedDatasets[exchangeId], resultFolder, 
                 masterData, activityOverview, cuteName = cuteName)

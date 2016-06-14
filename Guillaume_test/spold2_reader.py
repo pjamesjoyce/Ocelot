@@ -71,17 +71,18 @@ def readMeta(folder, filename):
     else:
         stem = root.childActivityDataset
     meta['activityName'] = stem.activityDescription.activity.activityName.text
-    meta['specialActivityType'] = stem.activityDescription.activity.get('specialActivityType')
+    meta['specialActivityType'] = int(stem.activityDescription.activity.get('specialActivityType'))
     meta['geography'] = stem.activityDescription.geography.shortname.text
-    meta['technologyLevel'] = stem.activityDescription.technology.get('technologyLevel')
+    meta['technologyLevel'] = int(stem.activityDescription.technology.get('technologyLevel'))
     if meta['technologyLevel'] == 'None':#sometimes not there, should be undefined
-        meta['technologyLevel'] = '0'
+        meta['technologyLevel'] = 0
     meta['startDate'] = stem.activityDescription.timePeriod.get('startDate')
     meta['endDate'] = stem.activityDescription.timePeriod.get('endDate')
     meta['id'] = stem.activityDescription.activity.get('id')
     meta['accessRestrictedTo'
-        ] = stem.administrativeInformation.dataGeneratorAndPublication.get(
-        'accessRestrictedTo')
+        ] = int(stem.administrativeInformation.dataGeneratorAndPublication.get(
+        'accessRestrictedTo'))
+    meta['lastOperationPerformed'] = 'read from spold2 file'
     return meta, stem
 def readUncertainty(to_add, e):
     #adds uncertainty fields to a quantitative information
@@ -278,15 +279,15 @@ def findAllocationType(meta, stem):
                     else:
                         nbAllocatableByProducts += 1
                     if (exc.get('activityLinkId') != None and 
-                            meta['specialActivityType'] == '1' and
+                            meta['specialActivityType'] == 1 and
                             amount < 0.):
                         hasConditionalExchange = True
                 for p in exc.iterchildren(tag = osf.tag_prefix + 'property'):
                     if p.name.text == 'true value relation':
                         hasTrueValue = True
-    if meta['specialActivityType'] == '10': #market group
+    if meta['specialActivityType'] == 10: #market group
         meta['allocationType'] = 'noAllocation'
-    elif meta['specialActivityType'] == '1': #market
+    elif meta['specialActivityType'] == 1: #market
         if hasConditionalExchange:
             meta['allocationType'] = 'constrainedMarket'
         else:
@@ -362,7 +363,7 @@ def readQuantitative(stem, masterData, meta, activityLinks):
                 #all properties required
                 quantitative, masterData = readProperty(quantitative, to_add, element, 
                     meta, masterData)
-            elif meta['allocationType'] in ['economicAllocation', 'allocatableFromWasteTreatment']:
+            elif meta['allocationType'] in ['economicAllocation', 'wasteTreatment', 'recyclingActivity']:
                 #only price required
                 quantitative, masterData = readProperty(quantitative, to_add, element, 
                     meta, masterData, propertyFilter = ['price'])
@@ -377,12 +378,6 @@ def readQuantitative(stem, masterData, meta, activityLinks):
             #only necessary for combined production
             assert 'parameter' in element.tag
             quantitative, masterData = readParameter(quantitative, element, masterData)
-        print len(quantitative), 
-        if len(quantitative) != 0:
-            print max(quantitative.keys())
-        else:
-            print 0
-        print ''
     #fill info about activityLink overview
     activityLinks = readActivityLinks(forActivityLinks, position_ref, 
         activityLinks, meta, quantitative)
@@ -497,13 +492,14 @@ def writeSupportExcel(resultFolderExcel, DB, DBFilename, resultFolderDB):
     cols = ['filename', 'id', 'activityName', 'geography', 'specialActivityType', 
             'accessRestrictedTo', 'startDate', 
             'endDate', 'group', 'product', 'amount', 'unit', 'productionVolumeAmount', 
-            'classification', 'allocationType', 'treatmentActivity', 
-            'nonAllocatableByProduct']
+            'classification', 'allocationType']
     activityOverview = activityOverview.replace(to_replace = {
         'specialActivityType': osf.specialActivityTypes})
     activityOverview = activityOverview.replace(to_replace = {
         'accessRestrictedTo': osf.accessRestrictedTos})
     activityOverview = activityOverview.sort(['activityName', 'geography'])
+    #set(activityOverview.columns).difference(set(cols))
+    #set(cols).difference(set(activityOverview.columns))
     activityOverview.to_excel(writer, 'activityOverview', 
         cols = cols, index = False, merge_cells = False)
     writer.save()
@@ -554,7 +550,6 @@ DBFilename = 'ecoinvent32_internal.pkl'#name of the database
 #DBFilename = 'economicAllocation.pkl'#name of the database
 resultFolderDB = r'C:\ocelot\databases'#where the database will land
 resultFolderExcel = r'C:\ocelot\excel\support'#where the support excel will land
-#filelist = ['002da2f2-595b-427e-ae3a-3f7dcd769715_6eb408db-980a-4b9e-82a8-b6dca183ec35.spold']
 masterData = {}
 for field in ['intermediateExchange', 'elementaryExchange', 
               'parameters', 'properties']:
@@ -564,7 +559,7 @@ activityLinks = {}
 datasets = {}
 counter = 0
 start = time.time()
-filelist = ['a6bbe7bb-7b64-4da5-be96-6ba658055690_e6aad2de-0b1b-49c3-a0c4-797ba34d87e5.spold']
+#filelist = ['0051bea7-f5ea-4511-aacc-c7f777e88f51_b7b72951-a57c-4364-9b49-ea3c7cb03d00.spold']
 for filename in filelist:
     counter += 1
     osf.estimate_time(start, counter, len(filelist))
